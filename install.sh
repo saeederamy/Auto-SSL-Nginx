@@ -17,11 +17,11 @@ mkdir -p "$DATA_DIR"
 header() {
     clear
     echo -e "\e[36m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\e[0m"
-    echo -e "\e[36m┃\e[0m \e[1;37m        NGINX PROXY MANAGER - PRO EDITION             \e[0m \e[36m┃\e[0m"
+    echo -e "\e[36m┃\e[0m \e[1;37m        NGINX PROXY MANAGER - RESCUE EDITION         \e[0m \e[36m┃\e[0m"
     echo -e "\e[36m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\e[0m"
 }
 
-# --- تابع بازسازی هوشمند کانفیگ (بدون خطا) ---
+# --- تابع بازسازی کانفیگ با چک کردن فیزیکی فایل‌های SSL ---
 rebuild_config() {
     local DOMAIN=$1
     local CONF_FILE="$NGINX_CONF_DIR/$DOMAIN"
@@ -36,7 +36,7 @@ server {
     client_max_body_size 0;
 
 EOF
-    # اضافه کردن پث‌ها به پورت 80
+    # افزودن مسیرها به پورت 80
     if [ -f "$PATHS_FILE" ]; then
         while IFS=',' read -r ppath pport; do
             [ -z "$ppath" ] && continue
@@ -53,11 +53,11 @@ EOF
         done < "$PATHS_FILE"
     fi
     cat >> "$CONF_FILE" <<EOF
-    location / { add_header Content-Type text/plain; return 200 "Nginx active for $DOMAIN"; }
+    location / { add_header Content-Type text/plain; return 200 "Nginx is active on Port 80 for $DOMAIN"; }
 }
 EOF
 
-    # بررسی وجود گواهینامه قبل از ساخت بلاک 443
+    # چک کردن هوشمند گواهینامه قبل از ساخت بلاک SSL
     if [ -f "$SSL_TYPE_FILE" ]; then
         SSL_TYPE=$(cat "$SSL_TYPE_FILE")
         CERT_PATH=""
@@ -71,7 +71,7 @@ EOF
             KEY_PATH="/etc/nginx/ssl/$DOMAIN.key"
         fi
 
-        # فقط اگر فایل‌های گواهینامه واقعاً وجود دارند بلاک 443 را بساز
+        # فقط اگر فایل‌های گواهینامه واقعاً در سرور موجود باشند، بلاک 443 را بنویس
         if [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
             cat >> "$CONF_FILE" <<EOF
 server {
@@ -101,9 +101,12 @@ EOF
                 done < "$PATHS_FILE"
             fi
             cat >> "$CONF_FILE" <<EOF
-    location / { add_header Content-Type text/plain; return 200 "Secure SSL Active for $DOMAIN"; }
+    location / { add_header Content-Type text/plain; return 200 "Secure SSL (HTTPS) Active for $DOMAIN"; }
 }
 EOF
+        else
+            # اگر فایل گواهینامه نیست، اطلاعات SSL را از دیتابیس حذف کن
+            rm -f "$SSL_TYPE_FILE"
         fi
     fi
 
@@ -116,34 +119,44 @@ install_nginx_ssl() {
     header
     read -e -p "Enter Domain: " DOMAIN
     
-    # پاکسازی اولیه برای رفع خطاهای apt
+    # گام اول: پاکسازی تمام فایل‌های خراب قبلی برای اجازه دادن به Nginx برای استارت
+    echo -e "\e[34m[!] Cleaning up broken Nginx configs...\e[0m"
     rm -f "/etc/nginx/sites-enabled/$DOMAIN"
     rm -f "/etc/nginx/sites-available/$DOMAIN"
-    rm -f "$DATA_DIR/$DOMAIN.ssl" # حذف موقت علامت SSL
+    rm -f "/etc/nginx/sites-enabled/default"
     
-    echo -e "\e[34mRepairing packages and installing Nginx...\e[0m"
+    # تلاش برای تعمیر نصب‌های ناقص
     apt --fix-broken install -y
     apt update && apt install nginx curl ufw socat certbot python3-certbot-nginx -y
     
-    # استارت با کانفیگ ساده (فقط پورت 80)
+    # ایجاد یک کانفیگ موقت روی پورت 80
     rebuild_config "$DOMAIN"
     
-    echo -e "\nChoose SSL Provider: 1) Certbot 2) Acme.sh"
+    echo -e "\e[1;33m\nChoose SSL Method (Let's Encrypt is Limited, try ZeroSSL):\e[0m"
+    echo -e "1) Certbot (Let's Encrypt)\n2) Acme.sh (ZeroSSL - Best to bypass limits)"
     read -p "Selection (1/2): " ssl_choice
+    
     if [ "$ssl_choice" == "1" ]; then
-        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email
-        echo "certbot" > "$DATA_DIR/$DOMAIN.ssl"
+        if certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email; then
+            echo "certbot" > "$DATA_DIR/$DOMAIN.ssl"
+        else
+            echo -e "\e[31m[!] Certbot failed. Check Rate Limits.\e[0m"
+        fi
     else
+        # نصب Acme.sh و استفاده از ZeroSSL
         curl https://get.acme.sh | sh
+        ~/.acme.sh/acme.sh --set-default-ca --server zerossl
         ~/.acme.sh/acme.sh --issue -d $DOMAIN --nginx
         mkdir -p /etc/nginx/ssl
-        ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --key-file /etc/nginx/ssl/$DOMAIN.key --fullchain-file /etc/nginx/ssl/$DOMAIN.cer
-        echo "acme" > "$DATA_DIR/$DOMAIN.ssl"
+        if ~/.acme.sh/acme.sh --install-cert -d $DOMAIN --key-file /etc/nginx/ssl/$DOMAIN.key --fullchain-file /etc/nginx/ssl/$DOMAIN.cer; then
+            echo "acme" > "$DATA_DIR/$DOMAIN.ssl"
+        else
+            echo -e "\e[31m[!] Acme.sh failed.\e[0m"
+        fi
     fi
     
-    # حالا که گواهینامه صادر شد، کانفیگ را به SSL ارتقا بده
     rebuild_config "$DOMAIN"
-    echo -e "\e[32m✔ Setup Complete.\e[0m"
+    echo -e "\e[32m✔ Domain Setup Completed.\e[0m"
     read -p "Press Enter to continue..."
 }
 
@@ -151,8 +164,8 @@ install_nginx_ssl() {
 add_proxy() {
     header
     read -e -p "Enter Domain: " DOMAIN
-    if [ ! -f "$NGINX_CONF_DIR/$DOMAIN" ]; then echo "Error: Setup Domain first!"; sleep 2; return; fi
-    read -e -p "Enter Internal Port: " PORT
+    if [ ! -f "$NGINX_CONF_DIR/$DOMAIN" ]; then echo "Error: Domain not found!"; sleep 2; return; fi
+    read -e -p "Enter Internal Port (e.g., 2053): " PORT
     read -e -p "Enter Path (e.g., ui): " PPATH
     PPATH="${PPATH#/}"
     PPATH="${PPATH%/}"
@@ -163,63 +176,48 @@ add_proxy() {
     read -p "Press Enter to continue..."
 }
 
-# --- سایر قابلیت‌ها (لیست، حذف، فایروال، آن‌انستال) ---
+# --- سایر گزینه‌ها ---
 list_proxies() {
     header
     for f in "$DATA_DIR"/*.paths; do
-        [ -e "$f" ] || continue
-        D=$(basename "$f" .paths)
-        echo -e "\e[1;32m● Domain: $D\e[0m"
-        while IFS=',' read -r ppath pport; do echo "   ➜ /$ppath/ -> Port: $pport"; done < "$f"
+        [ -e "$f" ] && echo -e "\e[1;32m● $(basename "$f" .paths)\e[0m" && cat "$f" | sed 's/,/ -> /'
     done
     read -p "Press Enter..."
 }
 
-delete_path() {
+delete_data() {
     header
-    read -e -p "Enter Domain: " DOMAIN
-    PF="$DATA_DIR/$DOMAIN.paths"
-    [ ! -f "$PF" ] && echo "No paths." && sleep 2 && return
-    cat -n "$PF"
-    read -p "Delete number: " n
-    sed -i "${n}d" "$PF"
-    rebuild_config "$DOMAIN"
+    read -e -p "Enter Domain to delete: " DOMAIN
+    rm -f "$NGINX_CONF_DIR/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN" "$DATA_DIR/$DOMAIN"*
+    systemctl restart nginx
     echo "✔ Deleted." && sleep 2
-}
-
-manage_ufw() {
-    header
-    echo -e "1) Open 80,443,22\n2) Disable Firewall"
-    read -p "Choice: " c
-    [ "$c" == "1" ] && ufw allow 80,443,22/tcp && ufw --force enable
-    [ "$c" == "2" ] && ufw disable
 }
 
 uninstall_all() {
     header
-    read -p "Confirm Full Uninstall? (y/n): " confirm
+    read -p "Full Uninstall? (y/n): " confirm
     if [ "$confirm" == "y" ]; then
         systemctl stop nginx
         apt purge nginx certbot -y
         rm -rf "$DATA_DIR" /etc/nginx/ssl /etc/letsencrypt
-        echo "✔ Cleaned. Deleting script..."
-        rm -- "$0"
+        echo "✔ Cleaned."
         exit 0
     fi
 }
 
+# --- Main Loop ---
 while true; do
     header
     echo -e "1) Setup Domain & SSL"
     echo -e "2) Add Proxy Path"
     echo -e "3) List Active Proxies"
-    echo -e "4) Delete a Path"
+    echo -e "4) Delete Domain Data"
     echo -e "5) Firewall (UFW)"
     echo -e "6) FULL UNINSTALL"
     echo -e "7) Exit"
     read -p " Option: " opt
     case $opt in
         1) install_nginx_ssl ;; 2) add_proxy ;; 3) list_proxies ;;
-        4) delete_path ;; 5) manage_ufw ;; 6) uninstall_all ;; 7) exit 0 ;;
+        4) delete_data ;; 5) ufw allow 80,443,22/tcp && ufw --force enable ;; 6) uninstall_all ;; 7) exit 0 ;;
     esac
 done
