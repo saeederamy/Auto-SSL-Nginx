@@ -27,29 +27,34 @@ install_nginx_ssl() {
     read -e -p "Enter Domain (e.g., p1.fastabotics.online): " DOMAIN
     
     echo -e "\e[34mCleaning old configs and installing Nginx...\e[0m"
+    
+    # رفع خطاهای احتمالی نصب قبلی
+    rm -rf /etc/nginx/sites-enabled/*
+    rm -rf /etc/nginx/sites-available/*
+    
     apt update && apt install nginx curl ufw socat -y
     
-    rm -f /etc/nginx/sites-enabled/default
     mkdir -p "$NGINX_PROXY_DIR/$DOMAIN"
     
-    # فایل تنظیمات اصلی - Include را به بالای لوکیشن اصلی بردیم
+    # ایجاد فایل کانفیگ پایه HTTP
     cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
     client_max_body_size 0;
 
-    # اولویت با فایل‌های پروکسی است
     include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
 
     location / {
         add_header Content-Type text/plain;
-        return 200 "Nginx is active for $DOMAIN. Add a path to see your service.";
+        return 200 "Nginx is active for $DOMAIN. Root path is working.";
     }
 }
 EOF
 
     ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/"
+    
+    # تست و ریستارت
     nginx -t && systemctl restart nginx
 
     echo -e "\nChoose SSL Provider: 1) Certbot 2) Acme.sh"
@@ -57,7 +62,8 @@ EOF
 
     if [ "$ssl_choice" == "1" ]; then
         apt install certbot python3-certbot-nginx -y
-        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email
+        # حذف تنظیمات قبلی سرت‌بات اگر وجود داشته باشد
+        certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email --force-renewal
     elif [ "$ssl_choice" == "2" ]; then
         curl https://get.acme.sh | sh
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
@@ -68,6 +74,7 @@ EOF
             --fullchain-file /etc/nginx/ssl/$DOMAIN.cer \
             --reloadcmd "systemctl reload nginx"
         
+        # آپدیت کانفیگ برای Acme (چون Acme خودش فایل Nginx را تغییر نمی‌دهد)
         cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
 server { listen 80; server_name $DOMAIN; return 301 https://\$host\$request_uri; }
 server {
@@ -81,11 +88,12 @@ server {
 
     location / { 
         add_header Content-Type text/plain;
-        return 200 "Secure SSL Active for $DOMAIN. Root path is working.";
+        return 200 "Secure SSL Active for $DOMAIN.";
     }
 }
 EOF
     fi
+    
     systemctl restart nginx
     echo -e "\e[32m✔ Domain and SSL setup finished.\e[0m"
     read -p "Press Enter to continue..." 
@@ -106,7 +114,7 @@ add_proxy() {
     PPATH="${PPATH#/}"
     PPATH="${PPATH%/}"
 
-    # ایجاد فایل کانفیگ اختصاصی با اولویت ^~
+    # کانفیگ پروکسی استاندارد برای x-ui و سایر وب‌سرورها
     cat > "$NGINX_PROXY_DIR/$DOMAIN/$PPATH.conf" <<EOF
 location ^~ /$PPATH/ {
     proxy_pass http://127.0.0.1:$PORT;
@@ -128,42 +136,36 @@ location = /$PPATH {
 }
 EOF
     
-    # پاک کردن کش احتمالی Nginx و بارگذاری مجدد
     nginx -t && systemctl restart nginx
     echo -e "\e[32m✔ Success: https://$DOMAIN/$PPATH/ -> Port $PORT\e[0m"
-    echo -e "\e[1;33m⚠️  If you still see the default message, please CLEAR YOUR BROWSER CACHE or use Incognito.\e[0m"
+    echo -e "\e[1;33m⚠️  Reminder: If using x-ui, set Web Base Path to /$PPATH/ in its settings!\e[0m"
     read -p "Press Enter to continue..." 
 }
 
-# --- 3) List & Diagnostics (برای عیب‌یابی) ---
+# --- سایر توابع منو ---
 list_proxies() {
     header
-    echo -e "\e[1;33m[3] List of Active Proxies & Debug Info\e[0m\n"
-    if [ ! -d "$NGINX_PROXY_DIR" ]; then echo "No configs found."; sleep 2; return; fi
-    
+    echo -e "\e[1;33m[3] Active Proxies\e[0m\n"
+    [ ! -d "$NGINX_PROXY_DIR" ] && echo "No configs." && sleep 2 && return
     for d in "$NGINX_PROXY_DIR"/*; do
         [ -d "$d" ] || continue
-        DOMAIN=$(basename "$d")
-        echo -e "\e[1;32m● Domain: $DOMAIN\e[0m"
-        
+        echo -e "\e[1;32m● Domain: $(basename "$d")\e[0m"
         shopt -s nullglob
         for conf in "$d"/*.conf; do
             P=$(basename "$conf" .conf)
             PORT=$(grep "proxy_pass" "$conf" | sed -E 's/.*:([0-9]+).*/\1/' | head -1)
-            echo -e "   ➜ Path: /$P  -->  Port: $PORT (File: $conf)"
+            echo -e "   ➜ Path: /$P  -->  Port: $PORT"
         done
         shopt -u nullglob
     done
-    echo -e "\n\e[34mNginx Status:\e[0m $(systemctl is-active nginx)"
-    read -p "Press Enter to continue..." 
+    read -p "Press Enter..." 
 }
 
-# --- بقیه توابع بدون تغییر ---
 delete_path() {
     header
     read -e -p "Enter Domain: " DOMAIN
     files=("$NGINX_PROXY_DIR/$DOMAIN"/*.conf)
-    if [ ${#files[@]} -eq 0 ]; then echo "No paths found."; sleep 2; return; fi
+    [ ${#files[@]} -eq 0 ] && echo "No paths." && sleep 2 && return
     i=1
     for f in "${files[@]}"; do echo "$i) $(basename "$f" .conf)"; let i++; done
     read -p "Choice: " choice
@@ -177,10 +179,8 @@ manage_ufw() {
     header
     echo -e "1) Open 80, 443, 22\n2) Disable Firewall"
     read -p "Select: " fchoice
-    case $fchoice in
-        1) ufw allow 80,443,22/tcp && ufw --force enable ;;
-        2) ufw disable ;;
-    esac
+    [ "$fchoice" == "1" ] && ufw allow 80,443,22/tcp && ufw --force enable
+    [ "$fchoice" == "2" ] && ufw disable
 }
 
 uninstall_all() {
@@ -189,7 +189,8 @@ uninstall_all() {
     if [ "$confirm" == "y" ]; then
         systemctl stop nginx
         apt purge nginx certbot -y
-        rm -rf /etc/nginx/proxy.d /etc/nginx/ssl /etc/letsencrypt
+        apt autoremove -y
+        rm -rf /etc/nginx/proxy.d /etc/nginx/ssl /etc/letsencrypt ~/.acme.sh
         echo "✔ Cleaned."
         exit 0
     fi
@@ -199,7 +200,7 @@ while true; do
     header
     echo -e "1) Setup Domain & SSL"
     echo -e "2) Add Proxy Path"
-    echo -e "3) List & Debug"
+    echo -e "3) List Active Proxies"
     echo -e "4) Delete Path"
     echo -e "5) Firewall"
     echo -e "6) FULL UNINSTALL"
