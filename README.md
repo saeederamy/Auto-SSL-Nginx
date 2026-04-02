@@ -21,7 +21,8 @@ A powerful, interactive, and beautifully designed Bash script to effortlessly ma
 Run the following one-liner command on your server (requires `root` privileges):
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh)
+rm -f /usr/local/bin/auto-ssl
+bash <(curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh?v=7")
 ```
 
 **Note:** After the first installation, you no longer need the `curl` command. Simply type `auto-ssl` in your terminal to open the manager!
