@@ -107,7 +107,6 @@ EOF
         ~/.acme.sh/acme.sh --register-account -m "admin@$DOMAIN" --server zerossl
         ~/.acme.sh/acme.sh --set-default-ca --server zerossl
         
-        # Explicitly force zerossl to override any cached Let's Encrypt configs for this domain
         if ~/.acme.sh/acme.sh --issue -d $DOMAIN --nginx --server zerossl --force; then
             mkdir -p /etc/nginx/ssl
             ~/.acme.sh/acme.sh --install-cert -d $DOMAIN \
@@ -294,7 +293,7 @@ EOF
         SUCCESS_URL="https://$DOMAIN/"
     else
         echo -e "\n${C_WHITE}What type of application is this?${C_RESET}"
-        echo -e "  ${C_CYAN}1)${C_RESET} Black Hub / Custom App (Forces Nginx URL rewriting & HTTPS Fixes)"
+        echo -e "  ${C_CYAN}1)${C_RESET} Black Hub / Custom App (Ultimate Nginx Fix - No Python code change needed!)"
         echo -e "  ${C_CYAN}2)${C_RESET} X-UI Panel (Direct Pass - *Requires setting Base Path in X-UI*)"
         read -p "Choice (1 or 2): " app_type
 
@@ -306,7 +305,6 @@ location /$PPATH/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
     
-    # --- Deep Proxy Headers for HTTPS & Sub-path ---
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -318,12 +316,16 @@ location /$PPATH/ {
     proxy_redirect / /$PPATH/;
     proxy_cookie_path / /$PPATH/;
 
-    # --- HTML/JS Base Tag Injection & Sub-filter ---
+    # --- FORCE HTTPS ON HTTP LINKS (Solves Download/Upload Button errors) ---
+    add_header Content-Security-Policy "upgrade-insecure-requests" always;
+
+    # --- JS MONKEY-PATCH INJECTION (Intercepts API requests automatically) ---
     proxy_set_header Accept-Encoding "";
-    sub_filter '<head>' '<head><base href="/$PPATH/">';
+    sub_filter '<head>' '<head><script>const P="/$PPATH";const f=window.fetch;window.fetch=function(){if(typeof arguments[0]==="string"&&arguments[0].startsWith("/")&&!arguments[0].startsWith(P)){arguments[0]=P+arguments[0];}return f.apply(this,arguments);};const o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){if(typeof arguments[1]==="string"&&arguments[1].startsWith("/")&&!arguments[1].startsWith(P)){arguments[1]=P+arguments[1];}return o.apply(this,arguments);};</script><base href="/$PPATH/">';
     sub_filter 'src="/' 'src="/$PPATH/';
     sub_filter 'href="/' 'href="/$PPATH/';
     sub_filter 'action="/' 'action="/$PPATH/';
+    sub_filter 'http://$DOMAIN' 'https://$DOMAIN';
     
     sub_filter_once off;
     sub_filter_types text/html text/css text/javascript application/javascript application/json;
