@@ -79,15 +79,17 @@ EOF
     systemctl restart nginx
 
     echo -e "\n${C_WHITE}Choose SSL Provider:${C_RESET}"
-    echo -e "  ${C_CYAN}1)${C_RESET} Certbot (Recommended)"
-    echo -e "  ${C_CYAN}2)${C_RESET} Acme.sh"
-    echo -e "  ${C_CYAN}3)${C_RESET} Skip SSL (Already Installed)"
-    read -p "Choice (1/2/3): " ssl_choice
+    echo -e "  ${C_CYAN}1)${C_RESET} Certbot (Recommended for normal domains)"
+    echo -e "  ${C_CYAN}2)${C_RESET} Acme.sh (Good for strict limits)"
+    echo -e "  ${C_CYAN}3)${C_RESET} Manual SSL (e.g., Cloudflare Origin Certs)"
+    echo -e "  ${C_CYAN}4)${C_RESET} Skip SSL (Already Installed)"
+    read -p "Choice (1/2/3/4): " ssl_choice
 
     if [ "$ssl_choice" == "1" ]; then
         echo -e "${C_BLUE}❖ Installing Certbot...${C_RESET}"
         apt install certbot python3-certbot-nginx -y
         certbot --nginx -d $DOMAIN --non-interactive --agree-tos --register-unsafely-without-email
+    
     elif [ "$ssl_choice" == "2" ]; then
         echo -e "${C_BLUE}❖ Installing Acme.sh...${C_RESET}"
         curl https://get.acme.sh | sh
@@ -100,7 +102,6 @@ EOF
             --fullchain-file /etc/nginx/ssl/$DOMAIN.cer \
             --reloadcmd "systemctl reload nginx"
             
-        # Add HTTPS redirect if not exists safely
         cat > /etc/nginx/sites-available/$DOMAIN <<EOF
 server { listen 80; server_name $DOMAIN; return 301 https://\$host\$request_uri; }
 server {
@@ -111,10 +112,37 @@ server {
     include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
 }
 EOF
+    
+    elif [ "$ssl_choice" == "3" ]; then
+        echo -e "\n${C_BLUE}❖ Manual SSL Configuration${C_RESET}"
+        echo -e "${C_YELLOW}Please upload your cert files to the server before proceeding.${C_RESET}"
+        read -p "Enter path to Certificate (.cer / .crt / .pem): " CERT_PATH
+        read -p "Enter path to Private Key (.key): " KEY_PATH
+
+        if [[ -f "$CERT_PATH" && -f "$KEY_PATH" ]]; then
+            cat > /etc/nginx/sites-available/$DOMAIN <<EOF
+server { listen 80; server_name $DOMAIN; return 301 https://\$host\$request_uri; }
+server {
+    listen 443 ssl;
+    server_name $DOMAIN;
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    
+    error_page 404 /custom_404.html;
+    location = /custom_404.html { return 200 "Secure Server is ready."; add_header Content-Type text/plain; }
+}
+EOF
+            echo -e "${C_GREEN}✔ Custom SSL configured for $DOMAIN!${C_RESET}"
+        else
+            echo -e "${C_RED}✖ Error: One or both SSL files not found. Configuration aborted.${C_RESET}"
+            sleep 2
+            return
+        fi
     fi
     
-    systemctl reload nginx
-    echo -e "${C_GREEN}✔ Nginx and SSL setup completed for $DOMAIN!${C_RESET}"
+    nginx -t && systemctl reload nginx
+    echo -e "${C_GREEN}✔ Setup completed for $DOMAIN!${C_RESET}"
     sleep 2
 }
 
@@ -124,7 +152,23 @@ function add_proxy() {
     echo -e "${C_CYAN}│${C_RESET}            ${C_WHITE}Add Reverse Proxy${C_RESET}             ${C_CYAN}│${C_RESET}"
     echo -e "${C_CYAN}╰──────────────────────────────────────────╯${C_RESET}"
     
-    read -p "🔹 Enter Domain (e.g., example.com): " DOMAIN
+    # --- Show Configured Domains ---
+    echo -e "${C_BLUE}❖ Configured Domains:${C_RESET}"
+    local found_domains=0
+    if [ -d "$NGINX_PROXY_DIR" ]; then
+        for d in "$NGINX_PROXY_DIR"/*; do
+            if [ -d "$d" ]; then
+                echo -e "  ${C_GREEN}✔ $(basename "$d")${C_RESET}"
+                found_domains=1
+            fi
+        done
+    fi
+    if [ $found_domains -eq 0 ]; then
+        echo -e "  ${C_YELLOW}No domains configured yet.${C_RESET}"
+    fi
+    echo -e "${C_CYAN}────────────────────────────────────────────${C_RESET}"
+
+    read -p "🔹 Enter Domain from list above (e.g., example.com): " DOMAIN
     read -p "🔹 Enter Internal Port (e.g., 8080): " PORT
     echo -e "${C_YELLOW}Tip: Type '/' for Root domain, or type a path like 'panel'${C_RESET}"
     read -p "🔹 Enter Path: " PPATH
