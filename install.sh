@@ -18,20 +18,21 @@ fi
 # --- Global Command Setup ---
 COMMAND_PATH="/usr/local/bin/auto-ssl"
 
-if [[ "$0" != "$COMMAND_PATH" && "$0" != "auto-ssl" ]]; then
+if [[ "$0" != "$COMMAND_PATH" && "$(basename "$0")" != "auto-ssl" ]]; then
     echo -e "${C_BLUE}❖ Installing 'auto-ssl' as a global command...${C_RESET}"
     
-    # If run via curl | bash, $0 is a pipe/descriptor, so we download it directly
-    if [[ -f "$0" && ! "$0" =~ ^/dev/fd/ && ! "$0" =~ ^/proc/ ]]; then
-        cp "$0" "$COMMAND_PATH"
-    else
+    # Try to copy local file, if it fails (like in bash <(curl...)), download from GitHub
+    if ! cp "$0" "$COMMAND_PATH" 2>/dev/null; then
         curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh" -o "$COMMAND_PATH"
     fi
     
     chmod +x "$COMMAND_PATH"
     ln -sf "$COMMAND_PATH" "/usr/bin/auto-ssl"
-    echo -e "${C_GREEN}✔ Done! Type 'auto-ssl' anywhere to launch the panel.${C_RESET}"
-    sleep 2
+    
+    echo -e "${C_GREEN}✔ Installed! Launching the panel...${C_RESET}"
+    sleep 1
+    
+    # Execute the newly installed global command and exit the temporary script
     exec "$COMMAND_PATH" "$@"
 fi
 
