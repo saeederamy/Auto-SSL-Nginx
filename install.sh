@@ -25,7 +25,6 @@ if [[ "$0" != "$COMMAND_PATH" && "$(basename "$0")" != "auto-ssl" ]]; then
     echo -e "${C_BLUE}❖ Installing 'auto-ssl' as a global command...${C_RESET}"
     
     if ! cp "$0" "$COMMAND_PATH" 2>/dev/null; then
-        # Splitted URL to avoid copy-paste UI bugs
         RAW_URL="https://""raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh"
         curl -Ls "$RAW_URL" -o "$COMMAND_PATH"
     fi
@@ -63,7 +62,6 @@ function install_nginx_ssl() {
     
     mkdir -p "$NGINX_PROXY_DIR/$DOMAIN"
     
-    # Setup base HTTP config
     if [ ! -f "/etc/nginx/sites-available/$DOMAIN" ]; then
         echo -e "${C_BLUE}❖ Creating new Nginx HTTP block on port $HTTP_PORT...${C_RESET}"
         cat > /etc/nginx/sites-available/$DOMAIN <<EOF
@@ -102,7 +100,6 @@ EOF
     
     elif [ "$ssl_choice" == "2" ]; then
         echo -e "${C_BLUE}❖ Installing Acme.sh...${C_RESET}"
-        # Splitted URL to avoid copy-paste UI bugs
         ACME_URL="https://""get.acme.sh"
         curl "$ACME_URL" | sh
         source ~/.bashrc
@@ -290,10 +287,10 @@ location / {
     proxy_set_header X-Real-IP \$remote_addr;
 }
 EOF
-        SUCCESS_URL="http(s)://$DOMAIN/"
+        SUCCESS_URL="https://$DOMAIN/"
     else
         echo -e "\n${C_WHITE}What type of application is this?${C_RESET}"
-        echo -e "  ${C_CYAN}1)${C_RESET} Black Hub / Custom Python App (Forces Nginx URL rewriting)"
+        echo -e "  ${C_CYAN}1)${C_RESET} Black Hub / Custom App (Forces Nginx URL rewriting & HTTPS Fixes)"
         echo -e "  ${C_CYAN}2)${C_RESET} X-UI Panel (Direct Pass - *Requires setting Base Path in X-UI*)"
         read -p "Choice (1 or 2): " app_type
 
@@ -304,31 +301,25 @@ location /$PPATH/ {
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
+    
+    # --- Deep Proxy Headers for HTTPS & Sub-path ---
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
-
-    # --- Backend Framework Support ---
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix /$PPATH;
-    proxy_set_header X-Script-Name /$PPATH;
 
     proxy_redirect / /$PPATH/;
     proxy_cookie_path / /$PPATH/;
 
-    # --- Aggressive HTML/JS Sub-filter ---
+    # --- HTML/JS Base Tag Injection & Sub-filter ---
     proxy_set_header Accept-Encoding "";
+    sub_filter '<head>' '<head><base href="/$PPATH/">';
     sub_filter 'src="/' 'src="/$PPATH/';
     sub_filter 'href="/' 'href="/$PPATH/';
     sub_filter 'action="/' 'action="/$PPATH/';
-    sub_filter 'url("/' 'url("/$PPATH/';
-    
-    sub_filter 'fetch("/' 'fetch("/$PPATH/';
-    sub_filter 'axios.get("/' 'axios.get("/$PPATH/';
-    sub_filter 'axios.post("/' 'axios.post("/$PPATH/';
-    sub_filter 'axios.put("/' 'axios.put("/$PPATH/';
-    sub_filter 'axios.delete("/' 'axios.delete("/$PPATH/';
-    sub_filter 'axios("/' 'axios("/$PPATH/';
     
     sub_filter_once off;
     sub_filter_types text/html text/css text/javascript application/javascript application/json;
@@ -350,7 +341,7 @@ EOF
             echo -e "\n${C_YELLOW}⚠ IMPORTANT: For X-UI to work on /$PPATH/, you MUST log in via IP:PORT first and set 'Panel url root path' to '/$PPATH/' in the X-UI settings!${C_RESET}"
             sleep 4
         fi
-        SUCCESS_URL="http(s)://$DOMAIN/$PPATH/"
+        SUCCESS_URL="https://$DOMAIN/$PPATH/"
     fi
     
     echo -e "${C_BLUE}❖ Testing Nginx Configuration...${C_RESET}"
