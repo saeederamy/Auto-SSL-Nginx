@@ -25,7 +25,7 @@ if [[ "$0" != "$COMMAND_PATH" && "$(basename "$0")" != "auto-ssl" ]]; then
     echo -e "${C_BLUE}❖ Installing 'auto-ssl' as a global command...${C_RESET}"
     
     if ! cp "$0" "$COMMAND_PATH" 2>/dev/null; then
-        curl -Ls "[https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh](https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh)" -o "$COMMAND_PATH"
+        curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh" -o "$COMMAND_PATH"
     fi
     
     chmod +x "$COMMAND_PATH"
@@ -100,7 +100,7 @@ EOF
     
     elif [ "$ssl_choice" == "2" ]; then
         echo -e "${C_BLUE}❖ Installing Acme.sh...${C_RESET}"
-        curl [https://get.acme.sh](https://get.acme.sh) | sh
+        curl "https://get.acme.sh" | sh
         source ~/.bashrc
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
@@ -278,7 +278,7 @@ function add_proxy() {
         # Root Proxy
         cat > "$NGINX_PROXY_DIR/$DOMAIN/root.conf" <<EOF
 location / {
-    proxy_pass [http://127.0.0.1](http://127.0.0.1):$PORT;
+    proxy_pass http://127.0.0.1:$PORT;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -296,7 +296,7 @@ EOF
         if [ "$app_type" == "1" ]; then
             cat > "$NGINX_PROXY_DIR/$DOMAIN/$PPATH.conf" <<EOF
 location /$PPATH/ {
-    proxy_pass [http://127.0.0.1](http://127.0.0.1):$PORT/;
+    proxy_pass http://127.0.0.1:$PORT/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -334,7 +334,7 @@ EOF
         else
             cat > "$NGINX_PROXY_DIR/$DOMAIN/$PPATH.conf" <<EOF
 location /$PPATH/ {
-    proxy_pass [http://127.0.0.1](http://127.0.0.1):$PORT;
+    proxy_pass http://127.0.0.1:$PORT;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection "upgrade";
