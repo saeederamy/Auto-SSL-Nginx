@@ -102,7 +102,9 @@ EOF
         echo -e "${C_BLUE}❖ Installing Acme.sh...${C_RESET}"
         ACME_URL="https://""get.acme.sh"
         curl "$ACME_URL" | sh
-        source ~/.bashrc
+        
+        echo -e "${C_BLUE}❖ Registering account and requesting SSL...${C_RESET}"
+        ~/.acme.sh/acme.sh --register-account -m "admin@$DOMAIN" --server letsencrypt
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
         if ~/.acme.sh/acme.sh --issue -d $DOMAIN --nginx; then
@@ -127,7 +129,7 @@ EOF
                 echo -e "${C_RED}✖ Acme.sh succeeded but cert files missing.${C_RESET}"
             fi
         else
-            echo -e "${C_RED}✖ Acme.sh failed to issue certificate!${C_RESET}"
+            echo -e "${C_RED}✖ Acme.sh failed to issue certificate! Please read the Acme.sh error logs above.${C_RESET}"
         fi
     
     elif [ "$ssl_choice" == "3" ]; then
@@ -152,13 +154,12 @@ EOF
             echo -e "${C_GREEN}✔ Custom SSL configured for $DOMAIN!${C_RESET}"
         else
             echo -e "${C_RED}✖ Error: One or both files not found. Setup aborted.${C_RESET}"
-            sleep 2
-            return
         fi
     fi
     
     nginx -t && systemctl reload nginx
-    sleep 2
+    echo ""
+    read -p "Press Enter to return to menu..."
 }
 
 # --- Domain & SSL Manager ---
@@ -180,7 +181,8 @@ function manage_domains() {
     
     if [ ${#domains[@]} -eq 0 ]; then
         echo -e "  ${C_YELLOW}No domains configured yet.${C_RESET}"
-        sleep 2
+        echo ""
+        read -p "Press Enter to return to menu..."
         return
     fi
     
@@ -189,7 +191,8 @@ function manage_domains() {
     
     if [[ ! " ${domains[*]} " =~ " ${DOMAIN} " ]]; then
         echo -e "${C_RED}✖ Domain not found in the list!${C_RESET}"
-        sleep 2
+        echo ""
+        read -p "Press Enter to return to menu..."
         return
     fi
     
@@ -216,7 +219,6 @@ function manage_domains() {
                  echo -e "${C_YELLOW}No valid SSL certificate found in standard paths for $DOMAIN.${C_RESET}"
             fi
         fi
-        read -p "Press Enter to continue..."
         
     elif [ "$action" == "2" ]; then
         read -p "Are you sure you want to delete ALL Nginx and SSL configs for $DOMAIN? (y/n): " confirm
@@ -237,9 +239,10 @@ function manage_domains() {
             
             nginx -t && systemctl reload nginx
             echo -e "${C_GREEN}✔ Domain $DOMAIN successfully removed!${C_RESET}"
-            sleep 2
         fi
     fi
+    echo ""
+    read -p "Press Enter to return to menu..."
 }
 
 # --- Add Reverse Proxy ---
@@ -339,7 +342,6 @@ location /$PPATH/ {
 }
 EOF
             echo -e "\n${C_YELLOW}⚠ IMPORTANT: For X-UI to work on /$PPATH/, you MUST log in via IP:PORT first and set 'Panel url root path' to '/$PPATH/' in the X-UI settings!${C_RESET}"
-            sleep 4
         fi
         SUCCESS_URL="https://$DOMAIN/$PPATH/"
     fi
@@ -353,7 +355,9 @@ EOF
         echo -e "${C_YELLOW}Removing the invalid proxy config to prevent Nginx crash...${C_RESET}"
         rm -f "$NGINX_PROXY_DIR/$DOMAIN/${PPATH:-root}.conf"
     fi
-    sleep 4
+    
+    echo ""
+    read -p "Press Enter to return to menu..."
 }
 
 # --- List Proxies ---
@@ -409,7 +413,8 @@ function remove_proxy() {
     else
         echo -e "${C_RED}✖ Path configuration not found!${C_RESET}"
     fi
-    sleep 2
+    echo ""
+    read -p "Press Enter to return to menu..."
 }
 
 # --- Deep Clean ---
