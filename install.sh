@@ -16,12 +16,18 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # --- Global Command Setup ---
-SCRIPT_PATH=$(realpath "$0")
 COMMAND_PATH="/usr/local/bin/auto-ssl"
 
-if [[ "$SCRIPT_PATH" != "$COMMAND_PATH" ]]; then
+if [[ "$0" != "$COMMAND_PATH" && "$0" != "auto-ssl" ]]; then
     echo -e "${C_BLUE}❖ Installing 'auto-ssl' as a global command...${C_RESET}"
-    cp "$SCRIPT_PATH" "$COMMAND_PATH"
+    
+    # If run via curl | bash, $0 is a pipe/descriptor, so we download it directly
+    if [[ -f "$0" && ! "$0" =~ ^/dev/fd/ && ! "$0" =~ ^/proc/ ]]; then
+        cp "$0" "$COMMAND_PATH"
+    else
+        curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh" -o "$COMMAND_PATH"
+    fi
+    
     chmod +x "$COMMAND_PATH"
     ln -sf "$COMMAND_PATH" "/usr/bin/auto-ssl"
     echo -e "${C_GREEN}✔ Done! Type 'auto-ssl' anywhere to launch the panel.${C_RESET}"
@@ -178,7 +184,7 @@ EOF
         echo -e "\n${C_GREEN}✔ Success! Access your service at: ${C_WHITE}$SUCCESS_URL${C_RESET}"
     else
         echo -e "${C_RED}✖ Config test failed. Removing invalid config...${C_RESET}"
-        rm "$NGINX_PROXY_DIR/$DOMAIN/${PPATH:-root}.conf"
+        rm -f "$NGINX_PROXY_DIR/$DOMAIN/${PPATH:-root}.conf"
     fi
     sleep 3
 }
