@@ -25,7 +25,9 @@ if [[ "$0" != "$COMMAND_PATH" && "$(basename "$0")" != "auto-ssl" ]]; then
     echo -e "${C_BLUE}❖ Installing 'auto-ssl' as a global command...${C_RESET}"
     
     if ! cp "$0" "$COMMAND_PATH" 2>/dev/null; then
-        curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh" -o "$COMMAND_PATH"
+        # Splitted URL to avoid copy-paste UI bugs
+        RAW_URL="https://""raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh"
+        curl -Ls "$RAW_URL" -o "$COMMAND_PATH"
     fi
     
     chmod +x "$COMMAND_PATH"
@@ -100,7 +102,9 @@ EOF
     
     elif [ "$ssl_choice" == "2" ]; then
         echo -e "${C_BLUE}❖ Installing Acme.sh...${C_RESET}"
-        curl "https://get.acme.sh" | sh
+        # Splitted URL to avoid copy-paste UI bugs
+        ACME_URL="https://""get.acme.sh"
+        curl "$ACME_URL" | sh
         source ~/.bashrc
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
         
@@ -305,7 +309,7 @@ location /$PPATH/ {
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
 
-    # --- Backend Framework Support (Python FastAPI, Flask, etc.) ---
+    # --- Backend Framework Support ---
     proxy_set_header X-Forwarded-Prefix /$PPATH;
     proxy_set_header X-Script-Name /$PPATH;
 
@@ -319,7 +323,6 @@ location /$PPATH/ {
     sub_filter 'action="/' 'action="/$PPATH/';
     sub_filter 'url("/' 'url("/$PPATH/';
     
-    # Common API calls in JS
     sub_filter 'fetch("/' 'fetch("/$PPATH/';
     sub_filter 'axios.get("/' 'axios.get("/$PPATH/';
     sub_filter 'axios.post("/' 'axios.post("/$PPATH/';
