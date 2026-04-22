@@ -1,4 +1,4 @@
-# ✨ Auto Nginx & SSL Manager
+# ✨ Auto Nginx & SSL Manager (Black-SSL)
 
 A powerful, interactive, and beautifully designed Bash script to effortlessly manage Nginx reverse proxies, SSL certificates, and sub-path routing. This tool is specifically optimized for custom web applications, VPN panels (like **X-UI**), and dynamic scripts (like **Black Hub**).
 
@@ -25,7 +25,7 @@ rm -f /usr/local/bin/auto-ssl
 bash <(curl -Ls "https://raw.githubusercontent.com/saeederamy/Auto-SSL-Nginx/refs/heads/main/install.sh?v=7")
 ```
 
-**Note:** After the first installation, you no longer need the `curl` command. Simply type `auto-ssl` in your terminal to open the manager!
+**Note:** After the first installation, you no longer need the `curl` command. Simply type `black-ssl` in your terminal to open the manager!
 
 ## 📋 Interactive Menu Overview
 
