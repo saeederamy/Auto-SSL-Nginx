@@ -356,6 +356,134 @@ EOF
 }
 
 # ====================================================================
+# Nginx & SSL Configuration — for a bare Public IP (same flow as domain)
+# ====================================================================
+function install_nginx_ssl_ip() {
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_WHITE}Nginx & SSL Configuration (Public IP)${C_RESET} ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────╯${C_RESET}"
+    echo -e "${C_YELLOW}Same flow as the domain setup, but server_name is your IP.${C_RESET}"
+
+    local detected_ip
+    detected_ip=$(detect_current_ip)
+    [ -n "$detected_ip" ] && echo -e "${C_BLUE}Detected public IP: ${C_WHITE}$detected_ip${C_RESET}"
+    read -ep "🔹 Enter Public IP (Enter to accept detected): " DOMAIN
+    DOMAIN=${DOMAIN:-$detected_ip}
+    [ -z "$DOMAIN" ] && { echo -e "${C_RED}✖ Empty IP.${C_RESET}"; echo ""; read -ep "Press Enter..."; return; }
+
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${C_BLUE}❖ Installing Nginx...${C_RESET}"
+        apt update && apt install nginx curl -y
+    else
+        echo -e "${C_GREEN}✔ Nginx is already installed.${C_RESET}"
+    fi
+    mkdir -p "$NGINX_PROXY_DIR/$DOMAIN"
+    SKIP_NGINX_OVERWRITE=0
+    if [ -f "/etc/nginx/sites-available/$DOMAIN" ]; then
+        echo -e "\n${C_YELLOW}⚠ WARNING: An Nginx configuration for '$DOMAIN' already exists!${C_RESET}"
+        read -ep "Do you want to OVERWRITE the existing config? (y/N): " overwrite
+        if [[ "$overwrite" != "y" && "$overwrite" != "Y" ]]; then
+            SKIP_NGINX_OVERWRITE=1
+            echo -e "${C_GREEN}✔ Preserving existing Nginx configuration.${C_RESET}"
+        fi
+    fi
+    if [ $SKIP_NGINX_OVERWRITE -eq 0 ]; then
+        read -ep "🔹 Enter HTTP Listen Port (Default: 80): " HTTP_PORT
+        HTTP_PORT=${HTTP_PORT:-80}
+        read -ep "🔹 Enter HTTPS Listen Port (Default: 443): " HTTPS_PORT
+        HTTPS_PORT=${HTTPS_PORT:-443}
+        echo -e "${C_BLUE}❖ Creating new Nginx HTTP block on port $HTTP_PORT...${C_RESET}"
+        cat > /etc/nginx/sites-available/$DOMAIN <<EOF
+server {
+    listen $HTTP_PORT;
+    server_name $DOMAIN;
+    client_max_body_size 0;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    error_page 404 /custom_404.html;
+    location = /custom_404.html {
+        return 200 "Server is ready. Please add a proxy path.";
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+        ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+    fi
+    systemctl restart nginx
+
+    echo -e "\n${C_WHITE}Choose SSL Provider:${C_RESET}"
+    echo -e " ${C_CYAN}1)${C_RESET} Let's Encrypt for this IP (free, trusted — renews every ~6 days, auto-renew enabled)"
+    echo -e " ${C_CYAN}2)${C_RESET} Self-signed certificate (free, no expiry hassle, but browser shows a warning)"
+    echo -e " ${C_CYAN}3)${C_RESET} Manual SSL (Upload your own certs, if you have any covering this IP)"
+    echo -e " ${C_CYAN}4)${C_RESET} Skip SSL (HTTP Only)"
+    read -ep "Choice (1/2/3/4): " ssl_choice
+
+    if [ "$ssl_choice" == "1" ]; then
+        if issue_letsencrypt_ip_cert "$DOMAIN" && [ $SKIP_NGINX_OVERWRITE -eq 0 ]; then
+            cat > /etc/nginx/sites-available/$DOMAIN <<EOF
+server { listen $HTTP_PORT; server_name $DOMAIN; return 301 https://\$host:$HTTPS_PORT\$request_uri; }
+server {
+    listen $HTTPS_PORT ssl;
+    server_name $DOMAIN;
+    client_max_body_size 0;
+    ssl_certificate $LE_IP_CERT;
+    ssl_certificate_key $LE_IP_KEY;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    error_page 404 /custom_404.html;
+    location = /custom_404.html { return 200 "Secure Server is ready."; add_header Content-Type text/plain; }
+}
+EOF
+            echo -e "${C_GREEN}✔ Let's Encrypt IP certificate applied! Both HTTP and HTTPS are active (HTTP redirects to HTTPS).${C_RESET}"
+        elif [ $SKIP_NGINX_OVERWRITE -eq 1 ]; then
+            echo -e "${C_YELLOW}✔ Certificate issued, but Nginx config was NOT overwritten as requested.${C_RESET}"
+        fi
+    elif [ "$ssl_choice" == "2" ]; then
+        if generate_self_signed_cert "$DOMAIN" && [ $SKIP_NGINX_OVERWRITE -eq 0 ]; then
+            cat > /etc/nginx/sites-available/$DOMAIN <<EOF
+server { listen $HTTP_PORT; server_name $DOMAIN; return 301 https://\$host:$HTTPS_PORT\$request_uri; }
+server {
+    listen $HTTPS_PORT ssl;
+    server_name $DOMAIN;
+    client_max_body_size 0;
+    ssl_certificate $SELFSIGNED_CERT;
+    ssl_certificate_key $SELFSIGNED_KEY;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    error_page 404 /custom_404.html;
+    location = /custom_404.html { return 200 "Secure Server is ready."; add_header Content-Type text/plain; }
+}
+EOF
+            echo -e "${C_GREEN}✔ Self-signed certificate applied! Both HTTP and HTTPS are active (HTTP redirects to HTTPS).${C_RESET}"
+        elif [ $SKIP_NGINX_OVERWRITE -eq 1 ]; then
+            echo -e "${C_YELLOW}✔ Certificate generated, but Nginx config was NOT overwritten as requested.${C_RESET}"
+        fi
+    elif [ "$ssl_choice" == "3" ]; then
+        read -ep "Enter path to Certificate (.cer/.crt/.pem): " CERT_PATH
+        read -ep "Enter path to Private Key (.key): " KEY_PATH
+        if [[ -f "$CERT_PATH" && -f "$KEY_PATH" && $SKIP_NGINX_OVERWRITE -eq 0 ]]; then
+            cat > /etc/nginx/sites-available/$DOMAIN <<EOF
+server { listen $HTTP_PORT; server_name $DOMAIN; return 301 https://\$host:$HTTPS_PORT\$request_uri; }
+server {
+    listen $HTTPS_PORT ssl;
+    server_name $DOMAIN;
+    client_max_body_size 0;
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    error_page 404 /custom_404.html;
+    location = /custom_404.html { return 200 "Secure Server is ready."; add_header Content-Type text/plain; }
+}
+EOF
+            echo -e "${C_GREEN}✔ Custom SSL configured! Both HTTP and HTTPS are active (HTTP redirects to HTTPS).${C_RESET}"
+        fi
+    fi
+
+    nginx -t && systemctl reload nginx
+    echo ""
+    echo -e "${C_WHITE}Now use option 2 (Add Reverse Proxy) and pick this IP to add a path → port mapping.${C_RESET}"
+    echo ""
+    read -ep "Press Enter to return to menu..."
+}
+
+# ====================================================================
 # Global Domain & SSL Manager
 # ====================================================================
 function manage_domains() {
@@ -524,8 +652,380 @@ EOF
 }
 
 # ====================================================================
-# List Proxies (UNCHANGED — was working)
+# Generic Internal Service Proxy (IIS, internal apps, anything on LAN)
 # ====================================================================
+# Use case: You have an existing SSL certificate (manual or wildcard from
+# ArvanCloud) and want to SSL-terminate traffic to ANY internal service
+# (IIS, another VM, a LAN device) that has no SSL of its own.
+# Also supports: self-signed SSL on a bare IP, and plain HTTP-only
+# reverse proxy on a bare IP (no SSL at all).
+
+# Generates a self-signed cert+key for a given CN (domain or IP).
+# Sets SELFSIGNED_CERT and SELFSIGNED_KEY on success.
+# Also writes a small metadata file next to the cert so we can later detect
+# if the server's IP changed and this cert needs to be regenerated.
+function generate_self_signed_cert() {
+    local cn="$1"
+    local out_dir="/etc/nginx/ssl/selfsigned/$cn"
+    mkdir -p "$out_dir"
+    SELFSIGNED_CERT="$out_dir/fullchain.pem"
+    SELFSIGNED_KEY="$out_dir/privkey.pem"
+
+    echo -e "${C_BLUE}❖ Generating self-signed certificate for '$cn' (valid 10 years)...${C_RESET}"
+
+    local san_line
+    if [[ "$cn" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        san_line="IP:$cn"
+    else
+        san_line="DNS:$cn"
+    fi
+
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$SELFSIGNED_KEY" \
+        -out "$SELFSIGNED_CERT" \
+        -subj "/CN=$cn" \
+        -addext "subjectAltName=$san_line" 2>/tmp/selfsigned_err
+
+    if [[ -f "$SELFSIGNED_CERT" && -f "$SELFSIGNED_KEY" ]]; then
+        # Save metadata: which CN this cert was issued for, and whether it's an IP
+        cat > "$out_dir/meta.conf" <<EOF
+CERT_CN="$cn"
+CERT_IS_IP=$([[ "$cn" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo 1 || echo 0)
+CERT_CREATED="$(date +%Y-%m-%d_%H:%M:%S)"
+EOF
+        echo -e "${C_GREEN}✔ Self-signed certificate created:${C_RESET}"
+        echo -e "  Cert: $SELFSIGNED_CERT"
+        echo -e "  Key:  $SELFSIGNED_KEY"
+        echo -e "${C_YELLOW}⚠ Browsers will show a security warning for self-signed certs.${C_RESET}"
+        echo -e "${C_YELLOW}  This is expected — click 'Advanced > Continue' to proceed.${C_RESET}"
+        return 0
+    else
+        echo -e "${C_RED}✖ Failed to generate self-signed certificate:${C_RESET}"
+        cat /tmp/selfsigned_err
+        return 1
+    fi
+}
+
+# Returns the server's current main public-facing IP (best effort).
+# Tries a domestic-friendly method first, falls back to local detection.
+function detect_current_ip() {
+    local ip
+    ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null)
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"; return 0
+    fi
+    ip=$(curl -s --max-time 5 https://ipv4.icanhazip.com 2>/dev/null)
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"; return 0
+    fi
+    # Fallback: local interface IP (may be a LAN/NAT IP, less reliable)
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+# Checks every self-signed cert under /etc/nginx/ssl/selfsigned/ that was
+# issued for an IP (not a domain). If the server's current IP differs from
+# the IP baked into the cert, regenerates it in-place (same file paths,
+# so nginx configs referencing it don't need to change) and reloads nginx.
+# Args: $1 = "verbose" to print progress, otherwise runs quietly (for cron).
+function check_and_fix_ip_certs() {
+    local verbose="${1:-quiet}"
+    local selfsigned_root="/etc/nginx/ssl/selfsigned"
+    [ ! -d "$selfsigned_root" ] && return 0
+
+    local current_ip
+    current_ip=$(detect_current_ip)
+    if [ -z "$current_ip" ]; then
+        [ "$verbose" = "verbose" ] && echo -e "${C_YELLOW}⚠ Could not detect current server IP. Skipping check.${C_RESET}"
+        return 1
+    fi
+    [ "$verbose" = "verbose" ] && echo -e "${C_BLUE}❖ Current server IP: $current_ip${C_RESET}"
+
+    local fixed=0
+    for cert_dir in "$selfsigned_root"/*; do
+        [ -d "$cert_dir" ] || continue
+        local meta="$cert_dir/meta.conf"
+        [ -f "$meta" ] || continue
+        source "$meta"
+        [ "$CERT_IS_IP" != "1" ] && continue   # only IP-based certs can go stale this way
+
+        if [ "$CERT_CN" != "$current_ip" ]; then
+            [ "$verbose" = "verbose" ] && echo -e "${C_YELLOW}⚠ Cert for old IP $CERT_CN ≠ current IP $current_ip — regenerating...${C_RESET}"
+
+            # Regenerate IN PLACE at the OLD directory path so nginx configs
+            # pointing at this path keep working without any edits.
+            local old_dir="$cert_dir"
+            openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+                -keyout "$old_dir/privkey.pem" \
+                -out "$old_dir/fullchain.pem" \
+                -subj "/CN=$current_ip" \
+                -addext "subjectAltName=IP:$current_ip" 2>/tmp/selfsigned_err
+
+            if [[ -f "$old_dir/fullchain.pem" ]]; then
+                cat > "$meta" <<EOF
+CERT_CN="$current_ip"
+CERT_IS_IP=1
+CERT_CREATED="$(date +%Y-%m-%d_%H:%M:%S)"
+CERT_PREVIOUS_CN="$CERT_CN"
+EOF
+                fixed=$((fixed+1))
+                [ "$verbose" = "verbose" ] && echo -e "${C_GREEN}✔ Regenerated cert in: $old_dir${C_RESET}"
+
+                # Also update server_name in any nginx site config that referenced the old IP
+                for f in /etc/nginx/sites-available/*; do
+                    [ -f "$f" ] || continue
+                    if grep -q "server_name $CERT_PREVIOUS_CN;" "$f" 2>/dev/null; then
+                        sed -i "s/server_name $CERT_PREVIOUS_CN;/server_name $current_ip;/" "$f"
+                        [ "$verbose" = "verbose" ] && echo -e "  ${C_GREEN}↳ Updated server_name in $f${C_RESET}"
+                    fi
+                done
+            else
+                [ "$verbose" = "verbose" ] && { echo -e "${C_RED}✖ Failed to regenerate:${C_RESET}"; cat /tmp/selfsigned_err; }
+            fi
+        fi
+    done
+
+    if [ "$fixed" -gt 0 ]; then
+        if nginx -t 2>/tmp/nginx_test_err; then
+            systemctl reload nginx
+            [ "$verbose" = "verbose" ] && echo -e "${C_GREEN}✔ Nginx reloaded with updated cert(s).${C_RESET}"
+        else
+            [ "$verbose" = "verbose" ] && { echo -e "${C_RED}✖ Nginx config error after update:${C_RESET}"; cat /tmp/nginx_test_err; }
+        fi
+    else
+        [ "$verbose" = "verbose" ] && echo -e "${C_GREEN}✔ All IP-based certs match the current IP. Nothing to do.${C_RESET}"
+    fi
+    return 0
+}
+
+# Attempts to issue/renew a free Let's Encrypt certificate for a bare IP
+# (Let's Encrypt added this in 2026 — short-lived, ~6 days, auto-renews).
+# Falls back gracefully (returns 1) if unavailable, so callers can offer
+# self-signed instead.
+function issue_letsencrypt_ip_cert() {
+    local ip="$1"
+    echo -e "${C_BLUE}❖ Attempting Let's Encrypt certificate for IP $ip (6-day, auto-renewing)...${C_RESET}"
+
+    if ! command -v certbot &>/dev/null; then
+        echo -e "${C_BLUE}❖ Installing Certbot...${C_RESET}"
+        apt install certbot -y
+    fi
+
+    if certbot certonly --standalone --non-interactive --agree-tos \
+        --register-unsafely-without-email -d "$ip" 2>/tmp/certbot_ip_err; then
+        LE_IP_CERT="/etc/letsencrypt/live/$ip/fullchain.pem"
+        LE_IP_KEY="/etc/letsencrypt/live/$ip/privkey.pem"
+        echo -e "${C_GREEN}✔ Let's Encrypt IP certificate issued!${C_RESET}"
+        # Make sure auto-renew cron exists (certbot's own systemd timer usually
+        # handles this, but we add a safety-net daily check too)
+        enable_daily_cert_check
+        return 0
+    else
+        echo -e "${C_YELLOW}⚠ Let's Encrypt IP certificate failed (may not be available in your region/Certbot version yet):${C_RESET}"
+        cat /tmp/certbot_ip_err
+        return 1
+    fi
+}
+
+# Installs a daily cron job that:
+#  1. Renews any Let's Encrypt certs (handles the 6-day IP certs + normal domain certs)
+#  2. Checks self-signed IP certs for staleness and regenerates if the IP changed
+function enable_daily_cert_check() {
+    local cron_marker="black-ssl-daily-cert-check"
+    local cron_line="0 4 * * * $COMMAND_PATH --daily-cert-check >/dev/null 2>&1 # $cron_marker"
+    if ! crontab -l 2>/dev/null | grep -q "$cron_marker"; then
+        (crontab -l 2>/dev/null; echo "$cron_line") | crontab -
+        echo -e "${C_GREEN}✔ Daily auto-renew/check enabled (runs at 4:00 AM).${C_RESET}"
+    fi
+}
+
+function disable_daily_cert_check() {
+    crontab -l 2>/dev/null | grep -v "black-ssl-daily-cert-check" | crontab -
+    echo -e "${C_GREEN}✔ Daily auto-renew/check disabled.${C_RESET}"
+}
+
+# What actually runs every night via cron
+function run_daily_cert_check() {
+    if command -v certbot &>/dev/null; then
+        certbot renew --quiet 2>/dev/null
+    fi
+    check_and_fix_ip_certs "quiet"
+}
+
+# Handle the cron flag (silent run) — placed right after function defs so
+# it's available as soon as possible, before the menu loop.
+if [ "$1" = "--daily-cert-check" ]; then
+    run_daily_cert_check
+    exit 0
+fi
+
+function add_generic_proxy() {
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_WHITE}Generic Internal Service Proxy${C_RESET} ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────╯${C_RESET}"
+    echo -e "${C_YELLOW}Use this for IIS, other VMs, or any internal service${C_RESET}"
+    echo -e "${C_YELLOW}that has NO SSL of its own. Nginx will terminate SSL${C_RESET}"
+    echo -e "${C_YELLOW}here using a certificate you already have.${C_RESET}"
+
+    read -ep "🔹 Enter Domain/Subdomain (e.g., solidworks.example.ir): " DOMAIN
+    [ -z "$DOMAIN" ] && { echo -e "${C_RED}✖ Empty domain.${C_RESET}"; echo ""; read -ep "Press Enter..."; return; }
+
+    if ! command -v nginx &> /dev/null; then
+        echo -e "${C_BLUE}❖ Installing Nginx...${C_RESET}"
+        apt update && apt install nginx -y
+    fi
+
+    mkdir -p "$NGINX_PROXY_DIR/$DOMAIN"
+
+    # --- Listen ports ---
+    read -ep "🔹 HTTP Listen Port (Default: 80): " HTTP_PORT
+    HTTP_PORT=${HTTP_PORT:-80}
+    read -ep "🔹 HTTPS Listen Port (Default: 443): " HTTPS_PORT
+    HTTPS_PORT=${HTTPS_PORT:-443}
+
+    # --- Certificate selection ---
+    echo -e "\n${C_WHITE}SSL Certificate Source:${C_RESET}"
+    echo -e " ${C_CYAN}1)${C_RESET} I already placed cert + key on this server (manual / ArvanCloud wildcard)"
+    echo -e " ${C_CYAN}2)${C_RESET} Reuse a path I used before in this script"
+    read -ep "Choice (1/2): " cert_choice
+
+    local CERT_PATH KEY_PATH
+    if [ "$cert_choice" == "2" ]; then
+        echo -e "\n${C_BLUE}❖ Certificates referenced elsewhere on this server:${C_RESET}"
+        local found_certs
+        found_certs=$(grep -hRoP 'ssl_certificate\s+\K\S+' /etc/nginx/sites-available/ /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | grep -v '_key' | tr -d ';' | sort -u)
+        if [ -z "$found_certs" ]; then
+            echo -e "  ${C_YELLOW}None found. You'll need to enter the path manually.${C_RESET}"
+        else
+            local i=1
+            local cert_arr=()
+            while IFS= read -r c; do
+                cert_arr+=("$c")
+                echo -e "  ${C_CYAN}$i)${C_RESET} $c"
+                i=$((i+1))
+            done <<< "$found_certs"
+            read -ep "🔹 Select certificate by number (or 0 to type manually): " csel
+            if [[ "$csel" =~ ^[0-9]+$ ]] && [ "$csel" -ge 1 ] && [ "$csel" -le "${#cert_arr[@]}" ]; then
+                CERT_PATH="${cert_arr[$((csel-1))]}"
+                KEY_PATH=$(grep -RlP "ssl_certificate\s+$CERT_PATH" /etc/nginx/sites-available/ /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | head -n1 | xargs grep -m1 "ssl_certificate_key" 2>/dev/null | awk '{print $2}' | tr -d ';')
+            fi
+        fi
+    fi
+
+    if [ -z "$CERT_PATH" ]; then
+        read -ep "🔹 Full path to Certificate (.crt/.cer/.pem): " CERT_PATH
+    else
+        echo -e "${C_GREEN}✔ Certificate: $CERT_PATH${C_RESET}"
+    fi
+    if [ -z "$KEY_PATH" ]; then
+        read -ep "🔹 Full path to Private Key (.key): " KEY_PATH
+    else
+        echo -e "${C_GREEN}✔ Private Key: $KEY_PATH${C_RESET}"
+    fi
+
+    if [[ ! -f "$CERT_PATH" ]]; then
+        echo -e "${C_RED}✖ Certificate file not found at: $CERT_PATH${C_RESET}"
+        echo ""; read -ep "Press Enter..."; return
+    fi
+    if [[ ! -f "$KEY_PATH" ]]; then
+        echo -e "${C_RED}✖ Key file not found at: $KEY_PATH${C_RESET}"
+        echo ""; read -ep "Press Enter..."; return
+    fi
+
+    # --- Internal target ---
+    echo -e "\n${C_WHITE}Internal Service Details:${C_RESET}"
+    read -ep "🔹 Internal IP (e.g., 192.168.100.33): " TARGET_IP
+    read -ep "🔹 Internal Port (e.g., 8085): " TARGET_PORT
+    read -ep "🔹 Internal Path (e.g., /SOLIDWORKSPDM/ — leave empty for /): " TARGET_PATH
+    # Strip accidental http:// or https:// prefix if user pasted a full URL by mistake
+    TARGET_IP="${TARGET_IP#http://}"
+    TARGET_IP="${TARGET_IP#https://}"
+    TARGET_PATH="/${TARGET_PATH#/}"
+    [ "${TARGET_PATH: -1}" != "/" ] && TARGET_PATH="${TARGET_PATH}/"
+
+    echo -e "\n${C_WHITE}Use the same path as public URL, or a custom one?${C_RESET}"
+    echo -e " ${C_CYAN}1)${C_RESET} Same as internal path ($TARGET_PATH)"
+    echo -e " ${C_CYAN}2)${C_RESET} Custom public path"
+    read -ep "Choice (1/2): " path_choice
+    local PUBLIC_PATH="$TARGET_PATH"
+    if [ "$path_choice" == "2" ]; then
+        read -ep "🔹 Enter public path (e.g., /pdm/): " PUBLIC_PATH
+        PUBLIC_PATH="/${PUBLIC_PATH#/}"
+        [ "${PUBLIC_PATH: -1}" != "/" ] && PUBLIC_PATH="${PUBLIC_PATH}/"
+    fi
+
+    # --- Build the site config (HTTP redirect + HTTPS w/ cert) ---
+    local SITE_CONF="/etc/nginx/sites-available/$DOMAIN"
+    local SKIP_OVERWRITE=0
+    if [ -f "$SITE_CONF" ]; then
+        echo -e "\n${C_YELLOW}⚠ A config for $DOMAIN already exists.${C_RESET}"
+        read -ep "Overwrite the site-level config (HTTP/HTTPS blocks)? (y/N): " ow
+        [[ "$ow" != "y" && "$ow" != "Y" ]] && SKIP_OVERWRITE=1
+    fi
+
+    if [ "$SKIP_OVERWRITE" -eq 0 ]; then
+        cat > "$SITE_CONF" <<EOF
+server {
+    listen $HTTP_PORT;
+    server_name $DOMAIN;
+    return 301 https://\$host:$HTTPS_PORT\$request_uri;
+}
+server {
+    listen $HTTPS_PORT ssl;
+    server_name $DOMAIN;
+    client_max_body_size 0;
+    ssl_certificate $CERT_PATH;
+    ssl_certificate_key $KEY_PATH;
+    include $NGINX_PROXY_DIR/$DOMAIN/*.conf;
+    error_page 404 /custom_404.html;
+    location = /custom_404.html {
+        return 200 "Secure Server is ready.";
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+        ln -sf "$SITE_CONF" /etc/nginx/sites-enabled/
+    fi
+
+    # --- Build the proxy location block (this is what you confirmed works) ---
+    local SAFE_NAME
+    SAFE_NAME=$(echo "$PUBLIC_PATH" | tr -d '/' )
+    [ -z "$SAFE_NAME" ] && SAFE_NAME="root"
+    local PROXY_CONF="$NGINX_PROXY_DIR/$DOMAIN/$SAFE_NAME.conf"
+
+    cat > "$PROXY_CONF" <<EOF
+location $PUBLIC_PATH {
+    proxy_pass http://$TARGET_IP:$TARGET_PORT$TARGET_PATH;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+EOF
+
+    # If the public path isn't root, also redirect "/" to it for convenience
+    if [ "$PUBLIC_PATH" != "/" ]; then
+        cat >> "$PROXY_CONF" <<EOF
+location = / {
+    return 301 $PUBLIC_PATH;
+}
+EOF
+    fi
+
+    echo -e "\n${C_BLUE}❖ Testing configuration...${C_RESET}"
+    if nginx_safe_reload "$PROXY_CONF" "revert"; then
+        echo -e "\n${C_GREEN}✔ Done! Your internal service is now available at:${C_RESET}"
+        echo -e "  ${C_WHITE}https://$DOMAIN:$HTTPS_PORT$PUBLIC_PATH${C_RESET}"
+        echo -e "${C_YELLOW}(Internal target: http://$TARGET_IP:$TARGET_PORT$TARGET_PATH)${C_RESET}"
+    fi
+    echo ""; read -ep "Press Enter..."
+}
+
 function list_proxies() {
     echo -e "\n${C_CYAN}╭──────────────────────────────────────────╮${C_RESET}"
     echo -e "${C_CYAN}│${C_RESET} ${C_WHITE}List All Configured Proxies${C_RESET} ${C_CYAN}│${C_RESET}"
@@ -831,6 +1331,45 @@ function update_script() {
 }
 
 # ====================================================================
+# IP Certificate Health Check (manual + cron toggle)
+# ====================================================================
+function ip_cert_health_check() {
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_WHITE}IP Certificate Health Check${C_RESET}    ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────╯${C_RESET}"
+    echo -e "${C_YELLOW}Checks self-signed certs issued for a bare IP — if the${C_RESET}"
+    echo -e "${C_YELLOW}server's IP has changed, regenerates the cert in-place.${C_RESET}"
+    echo -e "${C_YELLOW}Also renews any Let's Encrypt certs (incl. 6-day IP certs).${C_RESET}"
+
+    local cron_marker="black-ssl-daily-cert-check"
+    local cron_status="${C_RED}disabled${C_RESET}"
+    crontab -l 2>/dev/null | grep -q "$cron_marker" && cron_status="${C_GREEN}enabled (runs daily at 4:00 AM)${C_RESET}"
+    echo -e "\nAuto daily check: $cron_status"
+
+    echo -e "\n${C_WHITE}Options:${C_RESET}"
+    echo -e " ${C_CYAN}1)${C_RESET} Run the check now"
+    echo -e " ${C_CYAN}2)${C_RESET} Enable daily auto-check"
+    echo -e " ${C_CYAN}3)${C_RESET} Disable daily auto-check"
+    echo -e " ${C_CYAN}0)${C_RESET} Back"
+    read -ep "Choice: " c
+
+    case "$c" in
+        1)
+            echo ""
+            if command -v certbot &>/dev/null; then
+                echo -e "${C_BLUE}❖ Renewing Let's Encrypt certs (if any are due)...${C_RESET}"
+                certbot renew 2>&1 | tail -n 20
+            fi
+            echo ""
+            check_and_fix_ip_certs "verbose"
+            ;;
+        2) enable_daily_cert_check ;;
+        3) disable_daily_cert_check ;;
+    esac
+    echo ""; read -ep "Press Enter..."
+}
+
+# ====================================================================
 # Deep Clean
 # ====================================================================
 function uninstall_all() {
@@ -854,6 +1393,7 @@ while true; do
     echo -e "  Nginx: $(nginx_status_display)"
     echo ""
     echo -e "  1 ➜ Install Nginx & Setup Domain"
+    echo -e "  ${C_CYAN}12 ➜ Install Nginx & Setup on Public IP (no domain)${C_RESET}"
     echo -e "  2 ➜ Add Reverse Proxy (Port ➔ Path)"
     echo -e "  3 ➜ Global Domain & SSL Manager (Scan/Check/Remove)"
     echo -e "  4 ➜ List All Proxies (Internal & External)"
@@ -861,6 +1401,8 @@ while true; do
     echo -e "  ${C_YELLOW}7 ➜ Fix Nginx (Auto-repair config & duplicates)${C_RESET}"
     echo -e "  ${C_CYAN}8 ➜ Nginx Service Control (Start/Stop/Restart)${C_RESET}"
     echo -e "  ${C_GREEN}9 ➜ Update Script from GitHub${C_RESET}"
+    echo -e "  ${C_CYAN}10 ➜ Generic Internal Service Proxy (IIS / LAN apps / SSL termination)${C_RESET}"
+    echo -e "  ${C_CYAN}11 ➜ IP Certificate Health Check (auto-fix stale self-signed / renew)${C_RESET}"
     echo -e "  6 ➜ Danger: Deep Remove All"
     echo -e "  0 ➜ Exit"
     read -ep "  Select Option: " choice
@@ -874,6 +1416,9 @@ while true; do
         7) fix_nginx ;;
         8) service_control ;;
         9) update_script ;;
+        10) add_generic_proxy ;;
+        11) ip_cert_health_check ;;
+        12) install_nginx_ssl_ip ;;
         0) clear; exit 0 ;;
     esac
 done
